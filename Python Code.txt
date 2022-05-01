@@ -1,0 +1,1366 @@
+import pandas as pd
+import numpy as np
+import datetime as dt
+import calendar
+from domomagic import *
+from dateutil.relativedelta import relativedelta
+
+cdo_cases = read_dataframe('aggregate_data')
+
+df = read_dataframe('COVID_QA_Final Output')
+test = read_dataframe('97-98 COVID_QA_Final Output_Testing details')
+test2 = read_dataframe('89-100 121 COVID_QA_Final Output_Testing details v2')
+test2 = test2.sort_values(['Join Constant','Metric Value'], ascending = False)
+state_map = read_dataframe('State abbreviation to Full Names')
+raw = read_dataframe('WOM_COVID_US_FullData')
+HHS_NHSN = read_dataframe('HHS NHSN COVID Data')
+WOM_US_Rates = read_dataframe('WOM_US_Rates')
+Emplmpact_14daysoverlast14 = read_dataframe('executive_summary_mortality_source')
+HC_ServiceNow_data = read_dataframe('HC_ServiceNow_HRHD_PI_COVID')
+UHC_Covid_Patien_Cnt = read_dataframe('UHC Unique COVID Patient Count')
+uhc_domestic_RT_PCR = read_dataframe('7-day Average and % of Detected Members with RT-PCR Test by Lab Service Date')
+vaccine_data = read_dataframe('OCT_Our World In Data Global Vax Processed_OD_SUM_SafetoShare')
+
+cdc_vaccine_data = read_dataframe('OCT_CDC US State Vaccinations Processed_OD_SUM_SafetoShare')
+
+hospital_occupancy = read_dataframe('Global UHCG CDO Hospital Occupancy')
+newdf = read_dataframe('(CTP Replacement) OCT_Worldometer US States COVID-19 New Cases, Deaths, Tests w/ Moving Averages_OD_SafetoShare')
+
+us_positivity_data = read_dataframe('(CTP Replacement) COVID New Cases, Deaths, Tests w/ Moving Averages w/ US Total')
+
+
+yday = dt.date.today() - dt.timedelta(days=1)
+week_ago = yday - dt.timedelta(days=7)
+two_week_ago = yday - dt.timedelta(days=14)
+three_week_ago = yday - dt.timedelta(days=21)
+four_week_ago = yday - dt.timedelta(days=28)
+thirty_days_ago = yday-dt.timedelta(days=30)
+one_month_ago = yday - relativedelta(months=1)
+two_months_ago = yday - relativedelta(months=2)
+
+df['Date Updated'] = pd.to_datetime(df['Date Updated'])
+
+## Syed-8/20/2020: code to convert numbers below hundred to words
+num2words = {1: 'One', 2: 'Two', 3: 'Three', 4: 'Four', 5: 'Five', \
+             6: 'Six', 7: 'Seven', 8: 'Eight', 9: 'Nine', 10: 'Ten', \
+            11: 'Eleven', 12: 'Twelve', 13: 'Thirteen', 14: 'Fourteen', \
+            15: 'Fifteen', 16: 'Sixteen', 17: 'Seventeen', 18: 'Eighteen', \
+            19: 'Nineteen', 20: 'Twenty', 30: 'Thirty', 40: 'Forty', \
+            50: 'Fifty', 60: 'Sixty', 70: 'Seventy', 80: 'Eighty', \
+            90: 'Ninety', 0: 'Zero'}
+
+n2w_dict = {0: 'none',1: 'one', 2: 'two', 3: 'three', 4: 'four', 5: 'five', \
+             6: 'six', 7: 'seven', 8: 'eight', 9: 'nine'}
+
+def n2w_mortality(n):
+    try:
+        return (n2w_dict[n])
+    except KeyError:
+        try:
+            return n2w_dict[n-n%10] + n2w_dict[n%10].lower()
+        except KeyError:
+            return str(n)
+          
+
+def mortality(df1,df2):
+  filter1 = ((df1['Rank']> 1) & (df1['Rank'] < 16)) | (df1['Employee Population Flag'] == 1)
+  filter2 = (df1['EOHS Outcome'] == 'Death') & (df1['Case First Updated Rank'] == 1)
+  df1 = df1[filter1 & filter2] 
+  morality_last14days_cnt = df1['Count'].sum()  
+  df2  =df2[(df2['EOHS Outcome'] == 'Death') & (df2['Employee Type'] == 'Employee')]
+  morality_data_cnt = df2['Count'].sum()
+  a = '{} mortalities, {} in the last 14 days'.format(morality_data_cnt,n2w_mortality(morality_last14days_cnt))
+  return a
+
+def uhg_wf_rec(df):
+  #filter = df['EOHS Outcome'].isin(['Death','Hospitalized','Isolation','Recovered'])
+  #df = df[filter]
+  uhg_wf_rec_cnt = df[df['EOHS Outcome'] == 'Recovered']['Count'].sum()
+  a = '{:,} employees in recovered status'.format(uhg_wf_rec_cnt)
+  return a
+
+def uhg_wf_active(df):
+    #filter1 = df['EOHS Outcome'].isin(['Hospitalized','Isolation','Quarantine'])
+    filter2 = (df['Case Closed Prematurly'] == 'No') 
+    filter3 = df['Assignment group'].isin(['UHCG Health & Safety','US Health & Safety'])
+    filter4 = ((df['Rank']> 1) & (df['Rank'] < 16)) | (df['Employee Population Flag'] == 1)
+    df = df[filter2 & filter3 & filter4]
+  
+    uhg_wf_hosp_cnt = df[df['EOHS Outcome'] == 'Hospitalized']['Number'].nunique()
+    print(uhg_wf_hosp_cnt)
+    uhg_wf_iso_cnt = df[df['EOHS Outcome'] == 'Isolation']['Number'].nunique()
+    uhg_wf_quarn_cnt = df[df['EOHS Outcome'] == 'Quarantine']['Number'].nunique()
+    a = '{:,} active (isolated, hospitalized, quarantined) employee cases.'.format(uhg_wf_hosp_cnt+uhg_wf_iso_cnt+uhg_wf_quarn_cnt)
+    return a
+
+
+def n2w(n):
+  try:
+    return (num2words[n])
+  except KeyError:
+    try:
+      return num2words[n-n%10] + num2words[n%10].lower()
+    except KeyError:
+      return 'Number out of range'
+## Syed-8/20/2020: code to convert numbers below hundred to words
+
+def new_deaths_cases_KPI1 (Section,group, jc_list, df):
+
+    new_case_yday = int(df[df['Join Constant'] == jc_list[0]]['Metric Value'].iloc[0])
+    new_case_last_week = int(df[df['Join Constant'] == jc_list[1]]['Metric Value'].iloc[0])
+    change = df[df['Join Constant'] == jc_list[2]]['Metric Value'].iloc[0]
+    
+    MA_pc = df[df['Join Constant'] == jc_list[3]]['Metric Value'].iloc[0]
+    MA_yday = float(df[df['Join Constant'] == jc_list[4]]['Metric Value'].iloc[0])
+    MA_change = float(df[df['Join Constant'] == jc_list[5]]['Metric Value'].iloc[0])
+    MA_last_month = float(df[df['Join Constant'] == jc_list[6]]['Metric Value'].iloc[0])
+    MA_change = float(df[df['Join Constant'] == jc_list[5]]['Metric Value'].iloc[0])
+    
+    if(change >= 0):
+        print_text = "up"
+    else:
+        print_text = "down"
+        
+    a ='{:,} new '.format(new_case_yday) + group+ ' on {}/{}, {} {:.1f}% from {:,} last {}.'.format(yday.month,yday.day,print_text,abs(change),new_case_last_week,calendar.day_name[week_ago.weekday()])
+
+    
+    return a
+
+def new_deaths_cases_KPI2 (Section,group, jc_list, df):
+
+    new_case_yday = int(df[df['Join Constant'] == jc_list[0]]['Metric Value'].iloc[0])
+    new_case_last_week = int(df[df['Join Constant'] == jc_list[1]]['Metric Value'].iloc[0])
+    change = df[df['Join Constant'] == jc_list[2]]['Metric Value'].iloc[0]
+    
+    MA_pc = df[df['Join Constant'] == jc_list[3]]['Metric Value'].iloc[0]
+  
+    MA_yday = float(df[df['Join Constant'] == jc_list[4]]['Metric Value'].iloc[0])
+    MA_change = float(df[df['Join Constant'] == jc_list[5]]['Metric Value'].iloc[0])
+    MA_last_month = float(df[df['Join Constant'] == jc_list[6]]['Metric Value'].iloc[0])
+    MA_change = float(df[df['Join Constant'] == jc_list[5]]['Metric Value'].iloc[0])
+    
+    if MA_change >= 0:
+        print_text = "up"
+    else:
+        print_text = "down"
+    
+    if MA_pc >= 0:
+        print_text_ma_pc = "up"
+    else:
+        print_text_ma_pc = "down"
+        
+    
+    a = '{:,.0f} ({} {:.1f}% WoW) nominal 7-day moving average of new '.format(MA_yday,print_text_ma_pc,abs(MA_pc)) + group+ ' on {}/{}, {} {:.1f}% from {:,.0f} one month ago.'.format(yday.month,yday.day,print_text,abs(MA_change),MA_last_month)
+    
+    return a
+  
+def new_tests_KPI1 (df):
+    
+    maxdate = max(df["Date Updated"])
+    
+    week_ago = maxdate - dt.timedelta(days=7)
+    
+    new_test_yday = int(df[(df['Date Updated'] == maxdate) & (df['Latest_Date_Rank'] == 1)]['USA WOM Total New Tests'].mean())
+    
+    #new_test_weekago = int(df[df['Date Updated'] == week_ago]['USA WOM Total New Tests'].mean())
+    
+    new_test_weekago = int(df[(df['Date Updated'] == week_ago) & (df['State'] != "All States")]['USA WOM Total New Tests'].mean())
+ 
+    
+    change = ((new_test_yday - new_test_weekago) / new_test_weekago) * 100
+    
+    if change >0:
+        print_text = "up"
+    
+    if change <0:
+        print_text = "down"
+    
+    a = '{:,} new tests on {}/{}, {} {:.1f}% from {:,} last {}.'.format(new_test_yday,maxdate.month,maxdate.day,print_text,abs(round(change,1)),new_test_weekago,calendar.day_name[week_ago.weekday()])
+    
+    return a  
+
+
+def new_tests_KPI2 (df):
+    
+    maxdate = max(df["Date Updated"])
+    
+    week_ago = maxdate - dt.timedelta(days=7)
+    
+    new_test_yday = int(df[(df['Date Updated'] == maxdate) & (df['Latest_Date_Rank'] == 1)]['USA WOM New Tests N Days Moving AVG'].mean())
+    
+    new_test_weekago = int(df[df['Date Updated'] == week_ago]['USA WOM New Tests N Days Moving AVG'].mean())
+    
+    change = ((new_test_yday - new_test_weekago) / new_test_weekago) * 100
+    
+    four_week_ago = maxdate - dt.timedelta(days=28)
+    
+    new_test_four_week_ago = int(df[(df['Date Updated'] == four_week_ago) & (df['State'] != "All States")]['USA WOM New Tests N Days Moving AVG'].mean())
+    #new_test_four_week_ago = float(df[(df['Date Updated'] == four_week_ago)]['USA WOM Total New Tests'].mean())
+    
+    month_change = ((new_test_yday - new_test_four_week_ago) / new_test_four_week_ago) * 100
+    
+    if change >0:
+        print_text = "up"
+    if change <0:
+        print_text = "down"
+        
+    if month_change >0:
+        mc_print_text = "up"
+    if month_change <0:
+        mc_print_text = "down"
+        
+    a = '{:,.0f} ({} {:.1f}% WoW) nominal 7-day moving average of new tests on {}/{}, {} {:.1f}% from {:,.0f} one month ago.'.format(new_test_yday,print_text,round(abs(change),1),maxdate.month,maxdate.day,mc_print_text,round(abs(month_change),1),new_test_four_week_ago)
+         
+    return a
+  
+def us_positivity (df):
+    
+    maxdate = max(df["Date Updated"])
+    
+    month_ago = maxdate - dt.timedelta(days=7)
+    
+    four_week_ago = maxdate - dt.timedelta(days=28)
+    
+    current_positivity = int(df[(df['Date Updated'] == maxdate) & (df['Latest_Date_Rank'] == 1)]['positiveIncrease'].sum())
+    
+    totalTestResults_positivity = int(df[(df['Date Updated'] == maxdate) & (df['Latest_Date_Rank'] == 1)]['totalTestResultsIncrease'].sum())
+
+    current_positivity_rate = (current_positivity / totalTestResults_positivity) * 100
+    
+    one_month_ago_positivity = int(df[(df['Date Updated'] == four_week_ago)]['positiveIncrease'].mean())
+    
+    one_month_ago_totalTestResults_positivity = int(df[(df['Date Updated'] == four_week_ago)]['totalTestResultsIncrease'].mean())
+    
+    one_month_ago_positivity_rate = (one_month_ago_positivity / one_month_ago_totalTestResults_positivity) * 100
+
+    if (current_positivity_rate - one_month_ago_positivity_rate > 0):
+        print_text = "up"
+    else:
+        print_text = "down"
+      
+    a = '{:.1f}% 7-day positivity rate on {}/{}, {} from {:.1f}% one month ago.'.format(current_positivity_rate,maxdate.month,maxdate.day,print_text,one_month_ago_positivity_rate)
+     
+    return a
+
+
+dccountrylist = ["USA","India","Brazil"]
+othercountrylist = ["UK","Colombia","Portugal","Peru","Philippines","Chile","Ireland"]
+
+
+uhgcountrylist = ["USA","India","Brazil","UK","Colombia","Portugal","Peru","Philippines","Chile","Ireland"]
+
+
+def pc_global_cases_deaths (df,global_val,string):
+    ma_new_dc_countries = df[df['Category'] == string]['State/Country'].iloc[0:50].tolist()
+
+    ma_new_dc_values = df[df['Category'] == string]['Metric Value'].iloc[0:50].tolist()
+
+    ma_dc_total_dict = {}
+ 
+    for i in range(0,len( ma_new_dc_countries)):
+        
+        ma_dc_total_dict[ma_new_dc_countries[i]] = ma_new_dc_values[i]
+    
+    #print(ma_dc_total_dict)
+    
+    uhg_country = set(uhgcountrylist).intersection(set(ma_dc_total_dict.keys()))
+    #other_country = set(othercountrylist).intersection(set(ma_dc_total_dict.keys()))
+    
+    ma_dc_dict = {k:ma_dc_total_dict[k] for k in uhg_country}
+    #other_uhg_dict = {k:ma_dc_total_dict[k] for k in other_country}
+    
+    ma_dc_dict=dict(sorted(ma_dc_dict.items(), key=lambda item: item[1], reverse=True))
+    #other_uhg_dict = dict(sorted(other_uhg_dict.items(), key=lambda item: item[1] ,  reverse=True))
+    
+    print(ma_dc_dict)
+    
+    #print(other_uhg_dict)
+    
+    if(string == "Global 7 day MA Deaths"):
+      string = "Global 7-day MA Deaths"
+    else:
+      string = "Global 7-day MA Cases"
+  
+    
+    if (list(ma_dc_dict)[0] == 'USA')| (list(ma_dc_dict)[1] == 'USA'):
+        ma_dc_dict['The U.S.'] = ma_dc_dict.pop('USA')
+    else:
+        ma_dc_dict['the U.S.'] = ma_dc_dict.pop('USA')
+    ma_dc_dict = {k: v for k, v in sorted(ma_dc_dict.items(),reverse = True, key=lambda x: x[1])}   
+    
+        
+ 
+    
+    if(len(ma_dc_dict) == 2):        
+        country1 = list(ma_dc_dict)[0]
+        country1_val = round(list(ma_dc_dict.values())[0],2)
+        country1_pc = round(country1_val/global_val*100,1)
+
+        country2 = list(ma_dc_dict)[1]
+        country2_val = round(list(ma_dc_dict.values())[1],2)
+        country2_pc = round(country2_val/global_val*100,1)
+        a = '{} had {:.1f}% ({:,.0f}) of nominal 7-day moving average of new {} reported through {}/{}.  {} had {:.1f}% ({:,.0f}). '.format(country1,country1_pc,country1_val,string, yday.month,yday.day,country2,country2_pc,country2_val)
+        #print(a)
+    else:
+               
+        country1 = list(ma_dc_dict)[0]
+        country1_val = round(list(ma_dc_dict.values())[0],2)
+        country1_pc = round(country1_val/global_val*100,1)
+
+        country2 = list(ma_dc_dict)[1]
+        country2_val = round(list(ma_dc_dict.values())[1],2)
+        country2_pc = round(country2_val/global_val*100,1)
+
+        country3 = list(ma_dc_dict)[2]
+        country3_val = round(list(ma_dc_dict.values())[2],2)
+        country3_pc = round(country3_val/global_val*100,1)
+
+    a = '{} had {:.1f}% ({:,.0f}) of nominal 7-day moving average of new {} reported through {}/{}.  {} had {:.1f}% ({:,.0f}) and {} {:.1f}% ({:,.0f}). '.format(country1,country1_pc,country1_val,string, yday.month,yday.day,country2,country2_pc,country2_val,country3,country3_pc,country3_val)
+
+    
+    if len(ma_dc_dict) == 3:
+        for i in range(0,4):
+            other_uhg_dict[i] = i      
+            b = ''
+    elif len(ma_dc_dict) == 4:
+        country4 = list(ma_dc_dict)[3]
+        country4_val = round(list(ma_dc_dict.values())[3],2)
+        country4_pc = round(country4_val/global_val*100,1)
+
+        b = ' Other UHG locations to note: {} {:.1f}% ({:,.0f}).'.format(country4,country4_pc,country4_val)
+    
+    #(Sandeep) Date: 10/26/2020 - added coutires Philippines,Portugal and Ireland
+    
+    elif len(ma_dc_dict) == 5:
+        country4 = list(ma_dc_dict)[3]
+        country4_val = round(list(ma_dc_dict.values())[3],2)
+        country4_pc = country4_val/global_val*100
+        country5 = list(ma_dc_dict)[4]
+        country5_val = round(list(ma_dc_dict.values())[4],2)
+        country5_pc = country5_val/global_val*100
+        country6 = list(ma_dc_dict)[5]
+        country6_val = round(list(ma_dc_dict.values())[5],2)
+        country6_pc = country6_val/global_val*100
+        country7 = list(ma_dc_dict)[6]
+        country7_val = round(list(ma_dc_dict.values())[6],2)
+        country7_pc = country7_val/global_val*100
+
+        b = ' Other UHG locations to note: {} {:.1f}% ({:,.0f}), {} {:.1f}% ({:,.0f}), {} {:.1f}% ({:,.0f}) and {} {:.1f}% ({:,.0f}).'.format(country4,country4_pc,country4_val,country5,country5_pc,country5_val,country6,country6_pc,country6_val,country7,country7_pc,country7_val)
+
+    elif len(ma_dc_dict) == 6:
+        country4 = list(ma_dc_dict)[3]
+        country4_val = round(list(ma_dc_dict.values())[3],2)
+        country4_pc = country4_val/global_val*100
+        country5 = list(ma_dc_dict)[4]
+        country5_val = round(list(ma_dc_dict.values())[4],2)
+        country5_pc = country5_val/global_val*100
+        country6 = list(ma_dc_dict)[5]
+        country6_val = round(list(ma_dc_dict.values())[5],2)
+        country6_pc = country6_val/global_val*100
+        country7 = list(ma_dc_dict)[6]
+        country7_val = round(list(ma_dc_dict.values())[6],2)
+        country7_pc = country7_val/global_val*100
+        country8 = list(ma_dc_dict)[7]
+        country8_val = round(list(ma_dc_dict.values())[7],2)
+        country8_pc = country8_val/global_val*100
+
+
+        b = ' Other UHG locations to note: {} {:.1f}% ({:,.0f}), {} {:.1f}% ({:,.0f}), {} {:.1f}% ({:,.0f}) and {} {:.1f}% ({:,.0f}).'.format(country4,country4_pc,country4_val,country5,country5_pc,country5_val,country6,country6_pc,country6_val,country7,country7_pc,country7_val,country8,country8_pc,country8_val)
+
+    elif len(ma_dc_dict) == 7:
+        country4 = list(ma_dc_dict)[3]
+        country4_val = round(list(ma_dc_dict.values())[3],2)
+        country4_pc = country4_val/global_val*100
+        country5 = list(ma_dc_dict)[4]
+        country5_val = round(list(ma_dc_dict.values())[4],2)
+        country5_pc = country5_val/global_val*100
+        country6 = list(ma_dc_dict)[5]
+        country6_val = round(list(ma_dc_dict.values())[5],2)
+        country6_pc = country6_val/global_val*100
+        country7 = list(ma_dc_dict)[6]
+        country7_val = round(list(ma_dc_dict.values())[6],2)
+        country7_pc = country7_val/global_val*100
+        country8 = list(ma_dc_dict)[7]
+        country8_val = round(list(ma_dc_dict.values())[7],2)
+        country8_pc = country8_val/global_val*100
+        country9 = list(ma_dc_dict)[8]
+        country9_val = round(list(ma_dc_dict.values())[8],2)
+        country9_pc = country9_val/global_val*100
+
+
+        b = ' Other UHG locations to note: {} {:.1f}% ({:,.0f}), {} {:.1f}% ({:,.0f}), {} {:.1f}% ({:,.0f}) and {} {:.1f}% ({:,.0f}).'.format(country4,country4_pc,country4_val,country5,country5_pc,country5_val,country6,country6_pc,country6_val,country7,country7_pc,country7_val,country8,country8_pc,country8_val,country9,country9_pc,country9_val)
+        
+    else:
+        country4 = list(ma_dc_dict)[3]
+        country4_val = round(list(ma_dc_dict.values())[3],2)
+        country4_pc = round(country4_val/global_val*100,1)
+        country5 = list(ma_dc_dict)[4]
+        country5_val = round(list(ma_dc_dict.values())[4],2)
+        country5_pc = round(country5_val/global_val*100,1)
+        country6 = list(ma_dc_dict)[5]
+        country6_val = round(list(ma_dc_dict.values())[5],2)
+        country6_pc = round(country6_val/global_val*100,1)
+        country7 = list(ma_dc_dict)[6]
+        country7_val = round(list(ma_dc_dict.values())[6],2)
+        country7_pc = round(country7_val/global_val*100,1)
+        country8 = list(ma_dc_dict)[7]
+        country8_val = round(list(ma_dc_dict.values())[7],2)
+        country8_pc = round(country8_val/global_val*100,1)
+        country9 = list(ma_dc_dict)[8]
+        country9_val = round(list(ma_dc_dict.values())[8],2)
+        country9_pc = round(country9_val/global_val*100,1)
+        country10 = list(ma_dc_dict)[9]
+        country10_val = round(list(ma_dc_dict.values())[9],2)
+        country10_pc = round(country10_val/global_val*100,1)
+        
+        b = ' Other UHG locations to note: {} {:.1f}% ({:,.0f}), {} {:.1f}% ({:,.0f}), {} {:.1f}% ({:,.0f}), {} {:.1f}% ({:,.0f}), {} {:.1f}% ({:,.0f}), {} {:.1f}% ({:,.0f}) and {} {:.1f}% ({:,.0f}).'.format(country4,country4_pc,country4_val,country5,country5_pc,country5_val,country6,country6_pc,country6_val,country7,country7_pc,country7_val,country8,country8_pc,country8_val,country9,country9_pc,country9_val,country10,country10_pc,country10_val)
+
+    return a+b
+  
+def states_new_cases (df,qual_thresh,ignore_state_list,ignore_states_flag):
+    if ignore_states_flag == 1:
+      df = df[~df['State/Country'].isin(ignore_state_list)]
+    else:
+      print('No states removed!')
+    qualifying_states = df[(df['Join Constant'] == 100) & (df['Metric Value'] > qual_thresh)]['State/Country'].tolist()
+    #print(qualifying_states)
+    rat_df = df[df['Join Constant'] == 99]
+    rat_df['Increase_Flag'] = np.where(rat_df['Metric Value'] >0,1,0)
+    ratio_states = rat_df['Increase_Flag'].sum()/rat_df['Increase_Flag'].count()
+    qual_df = df[df['State/Country'].isin(qualifying_states)]
+    top_3 = qual_df[qual_df['Join Constant'] == 99].sort_values(['Metric Value'], ascending = False)['State/Country'].iloc[0:3].tolist()
+    top_3_vals = qual_df[qual_df['Join Constant'] == 99].sort_values(['Metric Value'], ascending = False)['Metric Value'].iloc[0:3].tolist()
+    bottom_3 = qual_df[(qual_df['Join Constant'] == 99) & (qual_df['Metric Value'] < 0)].sort_values(['Metric Value'], ascending = True)['State/Country'].iloc[0:5].tolist()
+    bottom_3_vals = qual_df[(qual_df['Join Constant'] == 99) & (qual_df['Metric Value'] < 0)].sort_values(['Metric Value'], ascending = True)['Metric Value'].iloc[0:5].tolist()
+    
+    if ratio_states >.5:
+        a = 'Overall, most States showed an increase in 7-day moving average new cases when compared to last week. '
+    elif ratio_states <.5:
+        a = 'Overall, most States showed a decrease in 7-day moving average new cases when compared to last week. '
+    else:
+        a = ''
+    
+    if len(bottom_3) == 0:
+         b = ' {} ({:.1%}), {} ({:.1%}) and {} ({:.1%}) showed the biggest deterioration while no state showed an improvement in new case numbers.'.format(top_3[0],top_3_vals[0],top_3[1],top_3_vals[1],top_3[2],top_3_vals[2])
+    
+    elif len(bottom_3) == 1:
+         b = ' {} ({:.1%}), {} ({:.1%}) and {} ({:.1%}) showed the biggest deterioration while only {} ({:.1%}) showed an improvement in new case numbers.'.format(top_3[0],top_3_vals[0],top_3[1],top_3_vals[1],top_3[2],top_3_vals[2],bottom_3[0],bottom_3_vals[0])
+    
+    elif len(bottom_3) == 2:
+         b = ' {} ({:.1%}), {} ({:.1%}) and {} ({:.1%}) showed the biggest deterioration while only {} ({:.1%}) and {} ({:.1%}) showed an improvement in new case numbers.'.format(top_3[0],top_3_vals[0],top_3[1],top_3_vals[1],top_3[2],top_3_vals[2],bottom_3[0],bottom_3_vals[0],bottom_3[1],bottom_3_vals[1])
+    
+    elif len(bottom_3) == 3:
+         b = ' {} ({:.1%}), {} ({:.1%}) and {} ({:.1%}) showed the biggest deterioration while only {} ({:.1%}), {} ({:.1%}) and {} ({:.1%}) showed an improvement in new case numbers.'.format(top_3[0],top_3_vals[0],top_3[1],top_3_vals[1],top_3[2],top_3_vals[2],bottom_3[0],bottom_3_vals[0],bottom_3[1],bottom_3_vals[1],bottom_3[2],bottom_3_vals[2])
+    
+    elif len(bottom_3) > 3:
+         b = ' {} ({:.1%}), {} ({:.1%}) and {} ({:.1%}) showed the biggest deterioration while {} ({:.1%}), {} ({:.1%}) and {} ({:.1%}) showed the biggest improvements in new case numbers.'.format(top_3[0],top_3_vals[0],top_3[1],top_3_vals[1],top_3[2],top_3_vals[2],bottom_3[0],bottom_3_vals[0],bottom_3[1],bottom_3_vals[1],bottom_3[2],bottom_3_vals[2])
+
+    return a+ b
+
+def us_states_positivity_greater(df,threshold,ignore_state_list,ignore_states_flag):
+    
+    if ignore_states_flag == 1:
+      df = df[~df['State'].isin(ignore_state_list)]
+    else:
+      print('No states removed!')
+    
+    filter_cond = (df['Latest Date Rank'] >= 1) & (df['Latest Date Rank'] <= 7)
+    
+    filtered_data = df[filter_cond]
+    
+    state_list = filtered_data.groupby(['State'])['State'].max().tolist()
+    positive_increase_state = filtered_data.groupby(['State'])['positiveIncrease'].sum().tolist()
+    total_test_increase_state = filtered_data.groupby(['State'])['totalTestResultsIncrease'].sum().tolist()
+    
+    positivity_rate = []
+    
+    for i in range(0,len(state_list)):
+        positivity_rate.append(positive_increase_state[i]/total_test_increase_state[i]*100)
+        
+    pos_greater_pc_dict = {}
+    pos_lessor_pc_dict ={}
+    
+    for i in range(0,len(state_list)):
+        if(positivity_rate[i] >= threshold):
+            pos_greater_pc_dict[state_list[i]] = positivity_rate[i]
+        else:
+            pos_lessor_pc_dict[state_list[i]] = positivity_rate[i]
+        
+ 
+    pos_greater_pc_dict = {k: v for k, v in sorted(pos_greater_pc_dict.items(),reverse = True, key=lambda x: x[1])}
+    pos_lessor_pc_dict = {k: v for k, v in sorted(pos_lessor_pc_dict.items(),reverse = True, key=lambda x: x[1])[:5]}
+    
+    print(len(pos_lessor_pc_dict))
+    
+    expression_greater = []
+    expression_lessor = []
+    for i in range(0, len(pos_greater_pc_dict),1):
+        expression_greater.append(list(pos_greater_pc_dict)[i])
+        expression_greater.append((list(pos_greater_pc_dict.values())[i]))
+        
+
+    for i in range(0,len(pos_lessor_pc_dict),1):
+        expression_lessor.append(list(pos_lessor_pc_dict)[i])
+        expression_lessor.append((list(pos_lessor_pc_dict.values())[i]))
+        
+    print(expression_lessor)
+    
+    if len(pos_greater_pc_dict) == 0:
+        comment_length = len(pos_lessor_pc_dict) - 1
+        comment  = 'States with the highest 7-day positivity rate:' +comment_length*(', {} ({:.1f}%)') + ' and {} ({:.1f}%)'+ str("") + '.'.format(*expression_lessor)
+        a = comment.format(*expression_lessor)
+        a = a.replace(':,',':')
+    
+    elif len(pos_greater_pc_dict) == 1:
+        a='Only {} ({:.1f}%) had a 7-day average positivity rate greater than 20%.'.format(*expression_greater)
+       
+    elif len(pos_greater_pc_dict) == 2:
+        comment=n2w(len(pos_greater_pc_dict))+" States had a 7-day average positivity rate greater than 20%: " + '{} ({:.1f}%) and {} ({:.1f}%)' + str("") + '.'.format(*expression_greater)
+
+        a = comment.format(*expression_greater)
+    
+    elif len(pos_greater_pc_dict) >2:
+        comment_length = len(pos_greater_pc_dict) - 2
+
+        comment=n2w(len(pos_greater_pc_dict))+" States had a 7-day average positivity rate greater than 20%: " + '{} ({:.1f}%)' + comment_length*(', {} ({:.1f}%)') + ' and {} ({:.1f}%)' + str("") + '.'.format(*expression_greater)
+        
+        a = comment.format(*expression_greater)
+
+
+    return a
+  
+  
+def us_states_positivity_improvement (df,ignore_state_list,ignore_states_flag):
+    if ignore_states_flag == 1:
+      df = df[~df['State'].isin(ignore_state_list)]
+    else:
+      print('No states removed!')
+    df = pd.pivot_table(df, index='State', columns='Join Constant', values='7 day positivity').reset_index().rename_axis(None, axis=1)
+    df.columns = ['State','Current','Previous']
+    df['Positivity Change'] = df["Current"] - df["Previous"]
+    biggest_change = df.sort_values(['Positivity Change'], ascending = True)['State'].iloc[0:3].tolist()
+    biggest_change_current = df.sort_values(['Positivity Change'], ascending = True)['Current'].iloc[0:3].tolist()
+    biggest_change_previous = df.sort_values(['Positivity Change'], ascending = True)['Previous'].iloc[0:3].tolist()
+    
+    a = 'The States that showed greatest improvement in 7-day test positivity were {} ({:.1f}% vs. {:.1f}% previous month), {} ({:.1f}% vs. {:.1f}%) and {} ({:.1f}% vs. {:.1f}%).'.format(biggest_change[0],biggest_change_current[0],biggest_change_previous[0],biggest_change[1],biggest_change_current[1],biggest_change_previous[1],biggest_change[2],biggest_change_current[2],biggest_change_previous[2])
+       
+    return a
+  
+  
+def pc_new_state_cases (df,state_map,num_states,ignore_state_list,ignore_states_flag):
+
+    yday = dt.date.today() - dt.timedelta(days=1)
+    df = df[(df['Date Updated'] == str(yday)) & (df['USA State'] != 'USA Total') & (df['USA State'] != 'Total:')]
+    state_map['USA State'] = state_map['Name']
+    df = df.merge(state_map, how = 'inner', on = ['USA State'])
+    if ignore_states_flag == 1:
+      df = df[~df['State or Region Code'].isin(ignore_state_list)]
+    else:
+      print('No states removed!')
+    df['pc_Total_new_cases'] = df['New Cases']/df['Overall New Cases']
+    top_5 = df.sort_values(['pc_Total_new_cases'], ascending = False)['State or Region Code'].iloc[0:num_states].tolist()
+    top_5_values = df.sort_values(['pc_Total_new_cases'], ascending = False)['pc_Total_new_cases'].iloc[0:num_states].tolist()
+    
+    print(top_5)
+    print(top_5_values)
+    total_pc = 0
+    for i in range(0,len(top_5_values)):
+           total_pc +=  float(top_5_values[i])
+    print(total_pc)   
+    
+    a = '{:.1%} of new cases came from {} states: {} ({:.1%}), {} ({:.1%}), {} ({:.1%}), {} ({:.1%}) and {} ({:.1%}).'.format(total_pc,num_states,top_5[0],top_5_values[0],top_5[1],top_5_values[1],top_5[2],top_5_values[2],top_5[3],top_5_values[3],top_5[4],top_5_values[4])
+    
+    return a
+
+
+
+def UHG_B1 (my_dict,state,metric,df):
+    Month = df[df['Join Constant'] == 102]['Date Updated'].dt.month.item()
+    Day = df[df['Join Constant'] == 102]['Date Updated'].dt.day.item()
+    a = '{:,.0f} cumulative confirmed and presumed workforce cases: '.format(my_dict[101])
+    return a
+
+
+def UHG_B2 (my_dict):
+    a ='{:,.0f} employees currently in isolation with a confirmed or presumed status; {:,.0f} hospitalized, and {:,.0f} mortalities. '.format(my_dict[105],my_dict[103],my_dict[104])
+    b = 'An additional {:,.0f} currently in quarantine with an exposed (unconfirmed) status.'.format(my_dict[106])
+    
+    return a + b
+  
+
+def UHG_B3 (my_dict):
+    change_out = (my_dict[111] - my_dict[112])*100/(my_dict[112])
+    change_in = (my_dict[108] - my_dict[109])*100/(my_dict[109])
+    
+    if change_out >= 0:
+        a ='{:,.0f} confirmed and presumed cases for our workforce outside of UHC Global (UHCG), with {:,.0f} cases recorded during the last 30 days, up {:.1f}% from the prior 30-day period of {:,.0f} cases. '.format(my_dict[110],my_dict[111],change_out,my_dict[112])
+    elif change_out < 0:
+        a ='{:,.0f} confirmed and presumed cases for our workforce outside of UHC Global (UHCG), with {:,.0f} cases recorded during the last 30 days, down {:.1f}% from the prior 30-day period of {:,.0f} cases. '.format(my_dict[110],my_dict[111],abs(change_out),my_dict[112])
+     
+    if change_in >= 0:
+        b = 'UHCG confirmed and presumed cases are currently at {:,.0f} with {:,.0f} cases recorded during the last 30 days, up {:.1f}% from the prior 30-day period of {:,.0f} cases.'.format(my_dict[107],my_dict[108],change_in,my_dict[109])
+    elif change_in < 0:
+        b = 'UHCG confirmed and presumed cases are currently at {:,.0f} with {:,.0f} cases recorded during the last 30 days, down {:.1f}% from the prior 30-day period of {:,.0f} cases.'.format(my_dict[107],my_dict[108],abs(change_in),my_dict[109])
+
+    return a + b
+
+
+def UHG_B4 (my_dict,df):
+    Month = df[df['Join Constant'] == 123]['Date Updated'].dt.month.item()
+    Day = df[df['Join Constant'] == 123]['Date Updated'].dt.day.item()
+    a ='{:,.0f} UHC domestic members confirmed positive in inpatient settings with {:,.0f} pending as of {}/{}.'.format(my_dict[113], my_dict[114],Month,Day)
+    
+    return a
+  
+def UHG_B7 (df):
+    
+    dt_lst = df['Uploaded Date'].tolist()
+    
+    tday = np.datetime64(dt.datetime.today())
+    
+    dtlst = []
+    for i in range(0,len(dt_lst)):
+        if(dt_lst[i] <= tday):
+            dtlst.append(list(dt_lst)[i])
+    
+    maxdate = max(dtlst)
+    month = maxdate.month
+    day = maxdate.day
+    
+    total_occu_per = df[df['Formatted Organization Name'] == "Total UHC Global"]['Total Occupancy %'].sum()
+    
+    
+    reg_occu_per = df[df['Formatted Organization Name'] == "Total UHC Global"]['Regular Occupancy %'].sum()
+    
+    icu_occu_per = df[df['Formatted Organization Name'] == "Total UHC Global"]['ICU Occupancy %'].sum()
+    
+    
+    a = '{:,.0f}% UHC Global overall bed occupancy, with ICU at {:,.0f}% and regular beds at {:,.0f}% as of {}/{}.'.format(round(total_occu_per*100),round(icu_occu_per*100),round(reg_occu_per*100),month,day)
+  
+    return a  
+  
+def UHG_B8 (my_dict):
+    a ='{:,.0f} COVID-19 tests conducted by OptumHealth CDOs, with a {:.1f}% positivity rate, down from {:.1f}% one month ago.'.format(my_dict[118], my_dict[119],my_dict[122])
+    
+    return a
+  
+  
+def UHG_B9 (mydf):
+  cdo_dict = mydf.to_dict()
+  a ='{:,.0f} confirmed cases reported by OptumHealth CDOs and Care Services, with {:,.0f} hospitalizations and {:,.0f} deaths.'.format(cdo_dict['Confirmed Cases'][0], cdo_dict['Cumulative Hospitalizations'][0],cdo_dict['Cumulative Deaths'][0])
+    
+    #a ='OptumHealth CDOs and Care Services reporting an aggregate total of {:,.0f} confirmed cases, with {:,.0f} currently hospitalized and {:,.0f} deaths.'.format(my_dict[115], my_dict[116],my_dict[117])
+    
+  return a    
+  
+def UHG_B10 (my_dict,df,positivity_rate): 
+
+    Month1 = df[df['Join Constant'] == 127]['Date Updated'].dt.month.item()
+    Day1 = df[df['Join Constant'] == 127]['Date Updated'].dt.day.item()
+    
+    Month2 = df[df['Join Constant'] == 129]['Date Updated'].dt.month.item()
+    Day2 = df[df['Join Constant'] == 129]['Date Updated'].dt.day.item()
+    
+    lstsort = positivity_rate.sort_values(by=['DOS'], ascending=False)
+    
+    per_detected = lstsort['% Detected'].iloc[0:7].tolist()    
+    
+    detected_7day_avg = round(sum(per_detected)/len(per_detected)*100,0)
+
+    if (round(detected_7day_avg,0) == 8) or (round(detected_7day_avg,0) == 11):
+        print_text = "an"
+    else:
+        print_text = "a"
+    
+    a ='{:,.0f} unique positive UHC domestic members reported by participating laboratory partners for COVD-19 RT-PCR, with {} {}% positivity rate as of {}/{}.'.format(my_dict[127],print_text,detected_7day_avg,Month1,Day1)
+    #b ='Positivity rate was {}% as compared to a peak of {:.1f}% on {}/{}.'.format(detected_7day_avg,my_dict[129],Month2,Day2)
+    
+    return a
+  
+def UHG_B11 (my_dict,df):
+    Month = df[df['Join Constant'] == 131]['Date Updated'].dt.month.item()
+    Day = df[df['Join Constant'] == 131]['Date Updated'].dt.day.item()
+    a ='{:,.0f} unique positive UHC domestic members reported by participating laboratory partners for COVID-19 antibodies as of {}/{}.'.format(my_dict[131],Month,Day)
+    
+    return a
+  
+def hospital_bed(df,per_val,col_header):
+    
+    per_value = float(per_val)    
+    
+    hosp_states = df[df['Latest_Date_Rank'] == 1]['State'].iloc[0:50].tolist()
+    hosp_values = df[df['Latest_Date_Rank'] == 1][col_header].iloc[0:50].tolist()
+
+    hosp_dict = {}
+    hosp_other_dict = {}
+        
+    for i in range(0,len(hosp_states)):
+        if(round(hosp_values[i]*100,0) >= per_value):
+            hosp_dict[hosp_states[i]] = hosp_values[i]
+        else:    
+            hosp_other_dict[hosp_states[i]] = hosp_values[i]
+        
+    #print(len(hosp_other_dict))
+    #print(len(hosp_dict))
+    #print(hosp_other_dict)
+
+    hosp_dict = {k: v for k, v in sorted(hosp_dict.items(),reverse = True, key=lambda x: x[1])} 
+    hosp_other_dict = {k: v for k, v in sorted(hosp_other_dict.items(),reverse = True, key=lambda x: x[1])} 
+    
+    hosp_dict = {key : round(hosp_dict[key]*100) for key in hosp_dict} 
+    hosp_other_dict = {key : round(hosp_other_dict[key]*100) for key in hosp_other_dict} 
+    
+    expression = []
+    
+    for i in range(0, len(hosp_dict),1):
+        expression.append(list(hosp_dict)[i])
+        expression.append((list(hosp_dict.values())[i]))
+        
+    #print(expression)
+    
+    print_text = ''
+    
+    if(col_header == 'Percentage of Inpatient Beds Occupied Estimated'):
+        print_text = 'Inpatient'
+    else:
+        print_text = 'ICU'
+        
+    if len(hosp_dict) == 0:
+        
+        a = 'No State had an ICU bed occupancy greater than 90%.'
+    
+    if len(hosp_dict) == 1:
+        #state1 = list(hosp_dict)[0]
+        #state1_val = round(list(hosp_dict.values())[0]*100)
+      
+        comment = 'One State had an  ' + print_text + ' bed occupancy greater than  ' + str(round(per_value)) + '%: {} ({:.0f}%)'.format(*expression)
+        a = comment.format(*expression)
+    
+    elif len(hosp_dict) == 2:
+        
+        comment = 'Two States had an  ' + print_text + ' bed occupancy greater than ' + str(round(per_value)) + '%: {} ({:.0f}%) and {} ({:.0f}%)'.format(*expression)
+        a = comment.format(*expression)
+        
+    elif len(hosp_dict) > 2:
+        comment_length = len(hosp_dict) - 2
+        #comment  = ' ' + str(len(hosp_dict)) + ' ({:.1f}% vs. {:.1f}% previous month)' + comment_length*(', {} ({:.1f}% vs. {:.1f}%)') + ' and {} ({:.1f}% vs. {:.1f}%) had 7-day average positivity rates greater than ' + str(threshold) + '%.'.format(*expression)
+        
+        comment = n2w_mortality(len(hosp_dict)).title()+' States had an ' + print_text + ' bed occupancy greater than ' + str(round(per_val)) + '%: ' + '{} ({:.0f})%' + comment_length*(', {} ({:.0f}%)') + ' and {} ({:.0f}%)' + str("") + ''.format(*expression)
+        a = comment.format(*expression)
+    
+    if len(hosp_dict) == 1:
+        hosp_other_states1 = list(hosp_other_dict)[0]
+        hosp_other_states1_val = round(list(hosp_other_dict.values())[0])
+
+        hosp_other_states2 = list(hosp_other_dict)[1]
+        hosp_other_states2_val = round(list(hosp_other_dict.values())[1])
+
+        hosp_other_states3 = list(hosp_other_dict)[2]
+        hosp_other_states3_val = round(list(hosp_other_dict.values())[2])
+
+        hosp_other_states4 = list(hosp_other_dict)[3]
+        hosp_other_states4_val = round(list(hosp_other_dict.values())[3])
+        b = ' with the next four highest States being: {} ({:.0f}%), {} ({:.0f}%),{} ({:.0f}%) and {} ({:.0f}%).'.format(hosp_other_states1,hosp_other_states1_val,hosp_other_states2,hosp_other_states2_val,hosp_other_states3,hosp_other_states3_val,hosp_other_states4,hosp_other_states4_val)
+        
+    elif len(hosp_dict) == 2:
+        hosp_other_states1 = list(hosp_other_dict)[0]
+        hosp_other_states1_val = round(list(hosp_other_dict.values())[0])
+
+        hosp_other_states2 = list(hosp_other_dict)[1]
+        hosp_other_states2_val = round(list(hosp_other_dict.values())[1])
+
+        hosp_other_states3 = list(hosp_other_dict)[2]
+        hosp_other_states3_val = round(list(hosp_other_dict.values())[2])
+
+        b = ' with the next three highest States being: {} ({:.0f}%),{} ({:.0f}%) and {} ({:.0f}%).'.format(hosp_other_states1,hosp_other_states1_val,hosp_other_states2,hosp_other_states2_val,hosp_other_states3,hosp_other_states3_val)
+
+    elif len(hosp_dict) == 3:
+        hosp_other_states1 = list(hosp_other_dict)[0]
+        hosp_other_states1_val = round(list(hosp_other_dict.values())[0])
+
+        hosp_other_states2 = list(hosp_other_dict)[1]
+        hosp_other_states2_val = round(list(hosp_other_dict.values())[1])
+
+        b = ' with the next two highest States being: {} ({:.0f}%) and {} ({:.0f}%).'.format(hosp_other_states1,hosp_other_states1_val,hosp_other_states2,hosp_other_states2_val)
+
+    elif len(hosp_dict) == 4:
+        hosp_other_states1 = list(hosp_other_dict)[0]
+        hosp_other_states1_val = round(list(hosp_other_dict.values())[0])
+
+
+        b = ' with the next highest State being: {} ({:.0f}%).'.format(hosp_other_states1,hosp_other_states1_val)
+
+    else:
+        b = ''
+
+    return a+b
+
+def usa_death_per_100(df):
+    
+    death_per_100_states = df['State or Region Code'].iloc[0:50].tolist()
+    death_per_100_cases = df['7 Day Per 100k'].iloc[0:50].tolist()
+    #death_per_100_POPESTIMATE2019 = df['POPESTIMATE2019'].iloc[0:50].tolist()
+
+
+    death_per_100_dict = {}
+    death_per_100_other_dict = {}
+    
+    for i in range(0,len(death_per_100_states)):
+        if(death_per_100_cases[i] >=100):
+            death_per_100_dict[death_per_100_states[i]] = death_per_100_cases[i]
+        else:    
+            death_per_100_other_dict[death_per_100_states[i]] = death_per_100_cases[i]
+            
+    
+    
+    
+    death_per_100_dict = {k: v for k, v in sorted(death_per_100_dict.items(),reverse = True, key=lambda x: x[1])} 
+    
+    death_per_100_other_dict = {k: v for k, v in sorted(death_per_100_other_dict.items(),reverse = True, key=lambda x: x[1])} 
+   
+    expression = []
+    
+    for i in range(0, len(death_per_100_dict),1):
+        expression.append(list(death_per_100_dict)[i])
+        expression.append((list(death_per_100_dict.values())[i]))
+    
+    #print(expression)
+    
+    if len(death_per_100_dict) == 0:
+        for i in range(0,10):
+            death_per_100_dict[int(i)] = int(i)
+        death_per_100_other_states1 = list(death_per_100_other_dict)[0]
+        death_per_100_other_states1_val = round(list(death_per_100_other_dict.values())[0])
+
+        death_per_100_other_states2 = list(death_per_100_other_dict)[1]
+        death_per_100_other_states2_val = round(list(death_per_100_other_dict.values())[1])
+
+        death_per_100_other_states3 = list(death_per_100_other_dict)[2]
+        death_per_100_other_states3_val = round(list(death_per_100_other_dict.values())[2])
+
+        death_per_100_other_states4 = list(death_per_100_other_dict)[3]
+        death_per_100_other_states4_val = round(list(death_per_100_other_dict.values())[3])
+        
+        death_per_100_other_states5 = list(death_per_100_other_dict)[4]
+        death_per_100_other_states5_val = round(list(death_per_100_other_dict.values())[4])
+        
+        a = 'States with the highest nominal 7 day moving average of new cases per 100,000: {} ({:}), {} ({:}), {} ({:}), {} ({:}) and {} ({:})'.format(death_per_100_other_states1,death_per_100_other_states1_val,death_per_100_other_states2,death_per_100_other_states2_val,death_per_100_other_states3,death_per_100_other_states3_val,death_per_100_other_states4,death_per_100_other_states4_val,death_per_100_other_states5,death_per_100_other_states5_val)
+
+    
+    elif len(death_per_100_dict) == 1:
+      
+        a = 'Only {} ({:.0f}) had a nominal 7 day moving average of new cases per 100,000 greater than 100'.format(*expression)
+        
+    
+    elif len(death_per_100_dict) == 2:
+        
+        a = 'Two States had a nominal 7 day moving average of new cases per 100,000 greater than 100: {} ({:.0f}) and {} ({:.0f})'.format(*expression)
+        
+    elif len(death_per_100_dict) > 2:
+        comment_length = len(death_per_100_dict) - 2
+        comment = n2w_mortality(len(death_per_100_dict)).title()+' States had a nominal 7 day moving average of new cases per 100,000 greater than 100: ' + '{} ({:.0f})' + comment_length*(', {} ({:.0f})') + ' and {} ({:.0f})' + str("") + ''.format(*expression)
+        a = comment.format(*expression)
+
+
+    if len(death_per_100_dict) == 0:
+        death_per_100_other_states1 = list(death_per_100_other_dict)[0]
+        death_per_100_other_states1_val = round(list(death_per_100_other_dict.values())[0])
+
+        death_per_100_other_states2 = list(death_per_100_other_dict)[1]
+        death_per_100_other_states2_val = round(list(death_per_100_other_dict.values())[1])
+
+        death_per_100_other_states3 = list(death_per_100_other_dict)[2]
+        death_per_100_other_states3_val = round(list(death_per_100_other_dict.values())[2])
+
+        death_per_100_other_states4 = list(death_per_100_other_dict)[3]
+        death_per_100_other_states4_val = round(list(death_per_100_other_dict.values())[3])
+        
+        death_per_100_other_states5 = list(death_per_100_other_dict)[4]
+        death_per_100_other_states5_val = round(list(death_per_100_other_dict.values())[4])
+        
+        b = ''
+    
+    elif len(death_per_100_dict) == 1:
+        death_per_100_other_states1 = list(death_per_100_other_dict)[0]
+        death_per_100_other_states1_val = round(list(death_per_100_other_dict.values())[0])
+
+        death_per_100_other_states2 = list(death_per_100_other_dict)[1]
+        death_per_100_other_states2_val = round(list(death_per_100_other_dict.values())[1])
+
+        death_per_100_other_states3 = list(death_per_100_other_dict)[2]
+        death_per_100_other_states3_val = round(list(death_per_100_other_dict.values())[2])
+
+        death_per_100_other_states4 = list(death_per_100_other_dict)[3]
+        death_per_100_other_states4_val = round(list(death_per_100_other_dict.values())[3])
+        b = ' with the next four highest states being: {} ({:}), {} ({:}), {} ({:}) and {} ({:}).'.format(death_per_100_other_states1,death_per_100_other_states1_val,death_per_100_other_states2,death_per_100_other_states2_val,death_per_100_other_states3,death_per_100_other_states3_val,death_per_100_other_states4,death_per_100_other_states4_val)
+        
+    elif len(death_per_100_dict) == 2:
+        death_per_100_other_states1 = list(death_per_100_other_dict)[0]
+        death_per_100_other_states1_val = round(list(death_per_100_other_dict.values())[0])
+
+        death_per_100_other_states2 = list(death_per_100_other_dict)[1]
+        death_per_100_other_states2_val = round(list(death_per_100_other_dict.values())[1])
+
+        death_per_100_other_states3 = list(death_per_100_other_dict)[2]
+        death_per_100_other_states3_val = round(list(death_per_100_other_dict.values())[2])
+
+        b = ' with the next three highest states being: {} ({:}), {} ({:}) and {} ({:}).'.format(death_per_100_other_states1,death_per_100_other_states1_val,death_per_100_other_states2,death_per_100_other_states2_val,death_per_100_other_states3,death_per_100_other_states3_val)
+
+    elif len(death_per_100_dict) == 3:
+        death_per_100_other_states1 = list(death_per_100_other_dict)[0]
+        death_per_100_other_states1_val = round(list(death_per_100_other_dict.values())[0])
+
+        death_per_100_other_states2 = list(death_per_100_other_dict)[1]
+        death_per_100_other_states2_val = round(list(death_per_100_other_dict.values())[1])
+
+        b = ' with the next two highest states being: {} ({:}) and {} ({:}).'.format(death_per_100_other_states1,death_per_100_other_states1_val,death_per_100_other_states2,death_per_100_other_states2_val)
+
+    elif len(death_per_100_dict) == 4:
+        death_per_100_other_states1 = list(death_per_100_other_dict)[0]
+        death_per_100_other_states1_val = round(list(death_per_100_other_dict.values())[0])
+
+
+        b = ' with the next highest state being: {} ({}).'.format(death_per_100_other_states1,death_per_100_other_states1_val)
+
+    else:
+        b = '.'
+        
+    
+    return a+b     
+    
+
+def uhc_unique_positive_mbrs(df):
+
+    total_count_lst = df['Total'].iloc[0:10].tolist()
+    total_count = total_count_lst[0]
+    
+    prof_claims_date = df['Professional Claims Date'].iloc[0:10].tolist()
+    prof_claims_md = str(prof_claims_date[0].month)+'/'+ str(prof_claims_date[0].day)
+    
+    facility_claims_date = df['Facility Claims Date'].iloc[0:10].tolist()
+    facility_claims_md = str(facility_claims_date[0].month)+'/'+ str(facility_claims_date[0].day)
+
+    batch_last_run = df['_BATCH_LAST_RUN_'].iloc[0:10].tolist()
+    batch_last_run_md = str(batch_last_run[0].month)+'/'+ str(batch_last_run[0].day)
+
+    a = "{:,} unique UHC members with a COVID-19 diagnosis identified via claims data as of {}.  COVID patient counts include physician claims through {} batch date and facility claims through {} batch date.".format(total_count,batch_last_run_md,prof_claims_md,facility_claims_md)
+    return a
+
+# Date: 02/05 Detail : Vaccination KPI Author : Sandeep Singh
+
+def usa_total_vaccine(df):
+    
+    filter_cond = (df['Latest_Date_Rank'] == 1) & (df['location'] == "United States")
+    
+    filtered_vaccine_data = df[filter_cond]
+    
+    usa_total_vaccination = round(filtered_vaccine_data['total_vaccinations'].sum())
+    
+    maxmonth = filtered_vaccine_data['date'].max()
+    
+    month = maxmonth.month
+    day =maxmonth.day
+    
+    a = '{:,.0f} total vaccine doses administered as of {}/{}.'.format(usa_total_vaccination,month,day) 
+    
+    return a
+
+
+def global_total_vaccine(df):
+    
+    filter_cond = (df['Latest_Date_Rank'] == 1) & (df['location'] == "World")
+    
+    filtered_vaccine_data = df[filter_cond]
+    
+    global_total_vaccination = round(filtered_vaccine_data['total_vaccinations'].sum())
+    
+    maxmonth = filtered_vaccine_data['date'].max()
+    
+    month = maxmonth.month
+    day =maxmonth.day
+    
+    #month = df[df['location'] == "World"]['date'].dt.month.item()
+    #day = df[df['location'] == "World"]['date'].dt.day.item()
+
+    loc_cond_filter = (df['Latest_Date_Rank'] == 1) & (~df['location'].isin(['England','Wales','World','Northern Ireland','Northern Cyprus','European Union','Scotland']))
+    #loc_cond_filter2 = (df['location'].isin(['England','Wales','World','Northern Ireland','Northern Cyprus','European Union','Scotland']))
+    
+    
+    loc_cnt = df[loc_cond_filter]['location'].count()
+ 
+    a = '{:,} total vaccine doses administered across {} countries as of {}/{}.'.format(global_total_vaccination,loc_cnt,month,day) 
+    
+    return a
+
+
+def global_7day_ma(df):
+    
+    filter_cond = (df['Latest_Date_Rank'] == 1) & (df['location'] == "World")
+    
+    filter_cond_pm = (df['Latest_Date_Rank'] == 29) & (df['location'] == "World")
+    
+    filtered_7day_ma_data = df[filter_cond]
+    
+    filtered_7day_ma_data_pm = df[filter_cond_pm]
+
+    global_7day_ma = round(filtered_7day_ma_data['daily_vaccinations 7 Day MA'].sum())
+    
+    global_7day_ma_pm = round(filtered_7day_ma_data_pm['daily_vaccinations 7 Day MA'].sum())
+    
+    try:
+        change_per =(global_7day_ma/global_7day_ma_pm - 1)*100
+    except:
+        return 0
+    
+    maxdt_cw = filtered_7day_ma_data['date'].max()
+       
+    month_cw = maxdt_cw.month
+    day_cw =maxdt_cw.day
+
+    if(change_per > 0):
+        flag = 'up'
+    else:
+        flag = 'down'
+    
+    a = '{:,.0f} nominal 7-day moving average of vaccine doses administered on {}/{}, {} {:.1f}% from {:,.0f} one month ago.'.format(global_7day_ma,month_cw,day_cw,flag,abs(change_per),global_7day_ma_pm) 
+    
+    return a
+
+
+def global_uhg_loc_vax(df):
+    
+    filter_cond = (df['UHG Country'] == "UHG") & (df['location'] != "World") & (df['Latest_Date_Rank'] == 1)
+    
+    filtered_vaccine_data = df[filter_cond]
+    
+    vaccine_country_lst = filtered_vaccine_data['location'].iloc[0:50].tolist()
+    vaccine_country_ppl_vax = filtered_vaccine_data['people_vaccinated_per_hundred'].iloc[0:50].tolist()
+    vaccine_country_tot_vax = filtered_vaccine_data['total_vaccinations_per_hundred'].iloc[0:50].tolist()
+    vaccine_country_ppl_cnt = filtered_vaccine_data['people_vaccinated'].iloc[0:50].tolist()
+    vaccine_country_tot_cnt = filtered_vaccine_data['total_vaccinations'].iloc[0:50].tolist()
+
+    vaccine_country = [item.replace('United Kingdom', 'UK') for item in vaccine_country_lst]
+    vaccine_country = [item.replace('United States', 'U.S.') for item in vaccine_country]
+            
+
+    vaccine_country_dict = {}
+    country_vaccine_count_dict ={}
+
+    for i in range(0,len(vaccine_country)):
+        if(np.isnan(vaccine_country_ppl_vax[i]) or np.isnan(vaccine_country_ppl_cnt[i])):
+            vaccine_country_dict[vaccine_country[i]] = [vaccine_country_tot_vax[i],vaccine_country_tot_cnt[i]]
+        else:
+            vaccine_country_dict[vaccine_country[i]] = [vaccine_country_ppl_vax[i],vaccine_country_ppl_cnt[i]]
+        
+    vaccine_country_dict = {k: v for k, v in sorted(vaccine_country_dict.items(),reverse = True, key=lambda x: x[1])} 
+
+    expression = []
+    
+    for i in range(0, len(vaccine_country_dict),1):
+        expression.append(list(vaccine_country_dict)[i])
+        expression.append((list(vaccine_country_dict.values())[i][0]))
+        expression.append((list(vaccine_country_dict.values())[i][1]))
+        
+    
+    if len(vaccine_country_dict) == 0:
+          a = ''
+    
+    elif len(vaccine_country_dict) == 1:
+      
+        a = 'The key UHG locations with the highest percentage of population vaccinated are: {} {:.1f}% ({:,.0f}).'.format(*expression)
+        
+    
+    elif len(vaccine_country_dict) == 2:
+        
+        a = 'The key UHG locations with the highest percentage of population vaccinated are: {} {:.1f}% ({:,.0f}) and {} ({:.1f}%) ({:,.0f})'.format(*expression)
+        
+    elif len(vaccine_country_dict) > 2:
+        
+        comment_length = len(vaccine_country_dict) - 2
+        comment = 'The key UHG locations with the highest percentage of population vaccinated are: ' + '{} {:.1f}% ({:,.0f})' + comment_length*(', {} {:.1f}% ({:,.0f})') + ' and {} {:.1f}% ({:,.0f})' + str("") + '.'.format(*expression)
+        a = comment.format(*expression)
+    return a
+  
+def us_uhg_state_vaccines(df,statedf):
+    
+    statedf['location'] = statedf['Name']
+    
+    df = df.merge(statedf, how = 'inner', on = ['location'])
+   
+    filter_cond = (df['Latest_Date_Rank'] == 1) & (df['location'].isin(['Arizona','California','Connecticut','Florida','Minnesota','Nevada','New York','Pennsylvania','Texas','Wisconsin']))
+      
+    filter_us_uhg_state_vaccine_data = df[filter_cond]
+
+    vaccine_state = filter_us_uhg_state_vaccine_data['State or Region Code'].iloc[0:50].tolist()
+    vaccine_state_values = filter_us_uhg_state_vaccine_data['people_vaccinated_per_hundred'].iloc[0:50].tolist()
+    #vaccine_state_count = filter_us_uhg_state_vaccine_data['people_vaccinated'].iloc[0:50].tolist()
+    
+    vaccine_state_dict = {}
+
+    for i in range(0,len(vaccine_state),1):
+        vaccine_state_dict[vaccine_state[i]] = vaccine_state_values[i]
+        
+    vaccine_state_dict = {k: v for k, v in sorted(vaccine_state_dict.items(),reverse = True, key=lambda x: x[1])[:5]} 
+    
+    expression = []
+    
+    for i in range(0, len(vaccine_state_dict),1):
+        expression.append(list(vaccine_state_dict)[i])
+        expression.append((list(vaccine_state_dict.values())[i]))
+        #expression.append((list(vaccine_state_dict.values())[i][1]))
+    
+    print(expression)
+    
+    if len(vaccine_state_dict) == 0:
+          a = ''
+    
+    elif len(vaccine_state_dict) == 1:
+      
+        a = 'Key UHG State with the highest percentage of population vaccinated: {}({:.1f}%).'.format(*expression)
+        
+    
+    elif len(vaccine_state_dict) == 2:
+        
+        a = 'Key UHG States with the highest percentage of population vaccinated: {} ({:.2f}%) and {} ({:.2f}%).'.format(*expression)
+        
+    elif len(vaccine_state_dict) > 2:
+        
+        comment_length = len(vaccine_state_dict) - 2
+        comment = 'Key UHG States with the highest percentage of population vaccinated: ' + '{} ({:.1f}%)' + comment_length*(', {} ({:.1f}%)') + ' and {} ({:.1f}%)' + str("") + '.'.format(*expression)
+        a = comment.format(*expression)
+    return a    
+
+  
+def us_7day_ma(df):
+   
+    filter_cond = (df['Latest_Date_Rank'] == 1) & (df['location'] != "United States")
+    
+    filter_cond_pm = (df['Latest_Date_Rank'] == 29) & (df['location'] != "United States")
+    
+    filter_us_7day_ma_data = df[filter_cond]
+    
+    filter_us_7day_ma_data_pm = df[filter_cond_pm]
+    
+    #print(filter_us_7day_ma_data_pm)
+    
+    us_7day_ma = round(filter_us_7day_ma_data["US Daily Vaccinations 7 Day MA"].mean())
+    
+    us_7day_ma_pm = round(filter_us_7day_ma_data_pm["US Daily Vaccinations 7 Day MA"].mean())
+    
+    
+    try:
+        change_per =(us_7day_ma/us_7day_ma_pm - 1)*100
+    except:
+        return 0
+    
+    maxdt_cw = filter_us_7day_ma_data['date'].max()
+       
+    month_cw = maxdt_cw.month
+    day_cw =maxdt_cw.day
+
+    if(change_per > 0):
+        flag = 'up'
+    else:
+        flag = 'down'
+    
+    a = '{:,.0f} nominal 7-day moving average of vaccine doses administered on {}/{}, {} {:.1f}% from {:,.0f} one month ago.'.format(us_7day_ma,month_cw,day_cw,flag,abs(change_per),us_7day_ma_pm) 
+    
+    return a
+
+  
+def vaccine_nominal(df,loc):
+    
+    filter_cond_cw = (df['Latest_Date_Rank'] == 1) & (df['location'] == loc)
+    
+    filter_cond_pw = (df['Latest_Date_Rank'] == 8) & (df['location'] == loc)
+    
+    filtered_vaccine_data_cw = df[filter_cond_cw]
+    
+    filtered_vaccine_data_pw = df[filter_cond_pw]
+    
+    usa_daily_dose_admin_cw = round(filtered_vaccine_data_cw['daily_vaccinations'].sum())
+    
+    usa_daily_dose_admin_pw = round(filtered_vaccine_data_pw['daily_vaccinations'].sum())
+    
+    try:
+        change_per =((usa_daily_dose_admin_cw - usa_daily_dose_admin_pw)/usa_daily_dose_admin_pw)*100
+    except:
+        return 0
+    flag = "none"
+    
+    if(change_per > 0):
+        flag = 'up'
+    else:
+        flag = 'down'
+    
+    maxdt_cw = filtered_vaccine_data_cw['date'].max()
+    
+    maxdt_pw = filtered_vaccine_data_pw['date'].max()
+    
+    month_cw = maxdt_cw.month
+    day_cw =maxdt_cw.day
+    
+    month_pw = maxdt_pw.month
+    day_pw = maxdt_pw.day
+    weekday_pw = maxdt_pw.strftime("%A")
+   
+
+    a = '{:,.0f} vaccine doses administered on {}/{}, {} {:.1f}% from {:,.0f} last {}.'.format(usa_daily_dose_admin_cw,month_cw,day_cw,flag,abs(change_per),usa_daily_dose_admin_pw,weekday_pw) 
+
+    return a  
+  
+us_deaths_jc_list = df[df['Category'] == 'US New Deaths']['Join Constant'].tolist()
+us_deaths_jc_list.sort()  
+
+us_cases_jc_list = df[df['Category'] == 'US New Cases']['Join Constant'].tolist()
+us_cases_jc_list.sort()  
+  
+global_deaths_jc_list = df[(df['Section'] == 'Global & UHC Global Location Data') & (df['Category'] == 'Global New Deaths')]['Join Constant'].tolist()
+global_deaths_jc_list.sort()
+
+global_cases_jc_list = df[(df['Section'] == 'Global & UHC Global Location Data') & (df['Category'] == 'Global New Cases')]['Join Constant'].tolist()
+global_cases_jc_list.sort()
+
+UHG_Workforce = df[df['Section'] == 'UHG Workforce, Member/Patient, and Ops Data'][['Join Constant','Metric Value']].sort_values(['Join Constant'])
+cons_met_dict = {}
+for i in range(0,len(UHG_Workforce)):
+    cons_met_dict[UHG_Workforce.iloc[i,0]] = UHG_Workforce.iloc[i,1]  
+
+UHG_Workforce2 = test2[test2['Section'] == 'UHG Workforce, Member/Patient, and Ops Data']
+country_dict = {'USA': 'U.S.','BRA':'Brazil','PER':'Peru', 'CHL':'Chile','PHL':'Philippines','COL':'Colombia', 'PRT':'Portugal', 'IRL':'Ireland','IND':'India','GBR':'UK','AUS':'Australia'}
+for i in country_dict:
+    UHG_Workforce2['State/Country'] = np.where(UHG_Workforce2['State/Country']== i,country_dict[i],UHG_Workforce2['State/Country'])
+    
+UHG_Workforce2 =UHG_Workforce2[['State/Country','Metric Value']].sort_values(['Metric Value'],ascending=False)
+state = UHG_Workforce2['State/Country'].to_list()
+metric = UHG_Workforce2['Metric Value'].to_list()  
+
+
+print('Passed point 1:')
+my_dict = {}
+ignore_state_list = ['SC']
+
+Date = str(dt.date.today() - dt.timedelta(days=1))
+US_Comment_Cases1 = new_deaths_cases_KPI1('U.S.','cases',us_cases_jc_list,df)
+
+US_Comment_Cases2 = new_deaths_cases_KPI2('U.S.','cases',us_cases_jc_list,df)
+
+US_Comment_Deaths1 = new_deaths_cases_KPI1('U.S.','deaths',us_deaths_jc_list,df) 
+
+US_Comment_Deaths2 = new_deaths_cases_KPI2('U.S.','deaths',us_deaths_jc_list,df) 
+US_Comment_Tests1 = new_tests_KPI1(newdf)
+US_Comment_Tests2 = new_tests_KPI2(newdf)
+US_Comment_Positivity = us_positivity(newdf)
+
+States_Comments_Cases = states_new_cases(test2, .03,ignore_state_list,0)
+States_Comments_Positivity = us_states_positivity_greater(us_positivity_data,20,ignore_state_list,0)
+States_Comments_Positivity_improvement = us_states_positivity_improvement(test,ignore_state_list,0)
+States_Comments_PC_Cases = pc_new_state_cases(raw,state_map,5,ignore_state_list,0)
+States_Comments_Hospital_Inpatient_Bed = hospital_bed(HHS_NHSN,85,'Percentage of Inpatient Beds Occupied Estimated')
+States_Comments_Hospital_ICU_Bed = hospital_bed(HHS_NHSN,90,'Percentage of ICU Beds Occupied Estimated')
+States_Comments_Deaths_per_100k = usa_death_per_100(WOM_US_Rates)
+
+Global_Comment_Cases1 = new_deaths_cases_KPI1('Global','cases',global_cases_jc_list,df)
+Global_Comment_Cases2 = new_deaths_cases_KPI2('Global','cases',global_cases_jc_list,df)
+
+Global_Comment_Deaths1 = new_deaths_cases_KPI1('Global','deaths',global_deaths_jc_list,df) 
+Global_Comment_Deaths2 = new_deaths_cases_KPI2('Global','deaths',global_deaths_jc_list,df) 
+
+Global_Comment_MA_Deaths = pc_global_cases_deaths(test2,float(df[df['Join Constant'] == 29]['Metric Value'].iloc[0]),'Global 7 day MA Deaths')
+Global_Comment_MA_Cases = pc_global_cases_deaths(test2,float(df[df['Join Constant'] == 36]['Metric Value'].iloc[0]), 'Global 7 day MA Cases')
+
+UHG_Workforce_Comments_B1 = UHG_B1(cons_met_dict, state, metric,df)
+UHG_Workforce_Comments_B2 = UHG_B2(cons_met_dict)
+UHG_Workforce_Comments_B3 = UHG_B3(cons_met_dict)
+UHG_Workforce_Comments_B4 = UHG_B4(cons_met_dict,df)
+UHG_Workforce_Comments_B7 = UHG_B7(hospital_occupancy)
+UHG_Workforce_Comments_B8 = UHG_B8(cons_met_dict)
+UHG_Workforce_Comments_B9 = UHG_B9(cdo_cases)
+UHG_Workforce_Comments_B10 = UHG_B10(cons_met_dict,df,uhc_domestic_RT_PCR)
+UHG_Workforce_Comments_B11 = UHG_B11(cons_met_dict,df)
+UHG_Workforce_Comments_morality = mortality(Emplmpact_14daysoverlast14,HC_ServiceNow_data)
+UHG_Workforce_Comments_Recovered = uhg_wf_rec(HC_ServiceNow_data)
+UHG_Workforce_Comments_active = uhg_wf_active(Emplmpact_14daysoverlast14)
+
+UHC_Workforce_Comments_Unique_Positive_Mbrs = uhc_unique_positive_mbrs(UHC_Covid_Patien_Cnt)
+
+# Vaccination KPI's
+USA_total_vaccine_dose_admin = usa_total_vaccine(cdc_vaccine_data)
+
+USA_Nominal_Vaccine_Measure = vaccine_nominal(cdc_vaccine_data,'United States') 
+USA_7day_ma_vaccine = us_7day_ma(cdc_vaccine_data)
+USA_uhg_state_vaccines = us_uhg_state_vaccines(cdc_vaccine_data,state_map)
+
+Global_total_vaccine_dose_admin = global_total_vaccine(vaccine_data)
+Global_Nominal_Vaccine_Measure = vaccine_nominal(vaccine_data,'World') 
+Global_7day_ma_vaccine = global_7day_ma(vaccine_data)
+Global_UHG_location_vaccines = global_uhg_loc_vax(vaccine_data)
+
+
+#print('Passed point 2:')
+my_dict['Summary'] = {}
+my_dict['Summary']['US New Deaths1'] = US_Comment_Deaths1
+my_dict['Summary']['US New Deaths2'] = US_Comment_Deaths2
+my_dict['Summary']['US New Cases1'] = US_Comment_Cases1 
+my_dict['Summary']['US New Cases2'] = US_Comment_Cases2 
+my_dict['Summary']['US Testing1'] = US_Comment_Tests1
+my_dict['Summary']['US Testing2'] = US_Comment_Tests2
+my_dict['Summary']['US Positivity'] = US_Comment_Positivity
+my_dict['Summary']['US State Cases'] = States_Comments_Cases
+my_dict['Summary']['US State PC New Cases'] = States_Comments_PC_Cases
+my_dict['Summary']['US State Highest Positivity'] = States_Comments_Positivity
+my_dict['Summary']['US State Positivity Improvement'] = States_Comments_Positivity_improvement
+my_dict['Summary']['Global New Deaths1'] = Global_Comment_Deaths1
+my_dict['Summary']['Global New Deaths2'] = Global_Comment_Deaths2
+my_dict['Summary']['Global New Cases1'] = Global_Comment_Cases1 
+my_dict['Summary']['Global New Cases2'] = Global_Comment_Cases2 
+my_dict['Summary']['Global 7 day MA Deaths'] = Global_Comment_MA_Deaths
+my_dict['Summary']['Global 7 day MA Cases'] = Global_Comment_MA_Cases 
+my_dict['Summary']['UHG Workforce Confirmed Presumed'] = UHG_Workforce_Comments_B1
+my_dict['Summary']['UHG Workforce Other Status'] = UHG_Workforce_Comments_B2
+my_dict['Summary']['UHCG and Non UHCG'] = UHG_Workforce_Comments_B3
+my_dict['Summary']['UHG Domestic'] = UHG_Workforce_Comments_B4
+my_dict['Summary']['UHG Hospital Occupancy'] = UHG_Workforce_Comments_B7
+my_dict['Summary']['UHG CDO Tests'] = UHG_Workforce_Comments_B8
+my_dict['Summary']['UHG CDO Cases'] = UHG_Workforce_Comments_B9
+my_dict['Summary']['UHC Domestic RT-PCR Testing'] = UHG_Workforce_Comments_B10
+my_dict['Summary']['UHC Domestic Antibody Testing'] = UHG_Workforce_Comments_B11
+my_dict['Summary']['US Hospitalizations Inpatient'] = States_Comments_Hospital_Inpatient_Bed
+my_dict['Summary']['US Hospitalizations ICU'] = States_Comments_Hospital_ICU_Bed
+my_dict['Summary']['US New Cases Deaths 100K'] = States_Comments_Deaths_per_100k
+my_dict['Summary']['UHG Workforce Mortalities'] = UHG_Workforce_Comments_morality
+my_dict['Summary']['UHG Workforce Recovered'] = UHG_Workforce_Comments_Recovered
+my_dict['Summary']['UHG Workforce Active Cases'] = UHG_Workforce_Comments_active
+my_dict['Summary']['UHC Unique Positive Members'] = UHC_Workforce_Comments_Unique_Positive_Mbrs
+
+my_dict['Summary']['Cases per UHG Global Locations'] = ("Case, Vaccine and Death Summary for key UHG countries on {}/{}:".format(yday.month,yday.day))
+
+
+# Vaccination Data
+
+my_dict['Summary']['US Total Vaccines'] = USA_total_vaccine_dose_admin
+my_dict['Summary']['US Nominal Vaccines'] = USA_Nominal_Vaccine_Measure
+my_dict['Summary']['US 7-Day MA Vaccines'] = USA_7day_ma_vaccine
+my_dict['Summary']['US UHG State Vaccines % Pop'] = USA_uhg_state_vaccines
+
+my_dict['Summary']['Global Total Vaccines'] = Global_total_vaccine_dose_admin
+my_dict['Summary']['Global Nominal Vaccines'] = Global_Nominal_Vaccine_Measure
+my_dict['Summary']['Global 7-Day MA Vaccines'] = Global_7day_ma_vaccine
+my_dict['Summary']['Global UHG Location Vaccines % Pop'] = Global_UHG_location_vaccines
+
+my_df = pd.DataFrame(my_dict).reset_index()
+
+#print('Passed point 3:')
+my_df['Category'] = my_df['index']
+my_df['Section'] = np.where(my_df['Category'].str.contains('US'),'United States Data',np.where(my_df['Category'].str.contains('Global'),'Global & UHC Global Location Data',np.where(my_df['Category'].str.contains('UH'),'UHG Workforce, Member/Patient, and Ops Data','Other')))
+my_df['Date'] = Date
+my_df = my_df.drop(['index'], axis = 1)
+cols = my_df.columns.tolist()
+#print('Passed point 4:')
+cols.insert(0, cols.pop(cols.index('Category')))
+cols.insert(0, cols.pop(cols.index('Section')))
+fin = my_df.reindex(columns= cols)
+
+
+
+write_dataframe(fin)
